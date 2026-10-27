@@ -11,37 +11,46 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Har exchange ka homepage + (optional) pehle se maloom events pages
+# Har exchange: naam -> homepage ke candidate addresses (pehla jo khul jaye wohi use hoga)
 EXCHANGES = {
-    "WEEX": {"home": "https://www.weex.com", "extra": ["https://www.weex.com/events"]},
-    "KCEX": {"home": "https://www.kcex.com", "extra": ["https://www.kcex.com/en-US/promotions"]},
-    "Bitunix": {"home": "https://www.bitunix.com", "extra": ["https://www.bitunix.com/promo"]},
-    "Toobit": {"home": "https://www.toobit.com", "extra": ["https://www.toobit.com/en-US/promotions"]},
-    "LBank": {"home": "https://www.lbank.com", "extra": ["https://www.lbank.com/new-popular-events"]},
-    "XT": {"home": "https://www.xt.com", "extra": ["https://www.xt.com/en/promotions"]},
-    "Ourbit": {"home": "https://www.ourbit.com", "extra": ["https://www.ourbit.com/promotions"]},
-    "Phemex": {"home": "https://phemex.com", "extra": ["https://phemex.com/promo"]},
-    "BloFin": {"home": "https://www.blofin.com", "extra": ["https://www.blofin.com/promotions"]},
+    "KCEX": ["https://www.kcex.com", "https://kcex.com"],
+    "BTCC": ["https://www.btcc.com", "https://btcc.com"],
+    "Bitunix": ["https://www.bitunix.com", "https://bitunix.com"],
+    "XT": ["https://www.xt.com", "https://xt.com"],
+    "Toobit": ["https://www.toobit.com", "https://toobit.com"],
+    "Phemex": ["https://phemex.com", "https://www.phemex.com"],
+    "BloFin": ["https://www.blofin.com", "https://blofin.com"],
+    "EasiCoin": ["https://www.easicoin.io", "https://easicoin.io"],
+    "Bitbase": ["https://www.bitbase.com", "https://bitbase.com"],
+    "AlphaX": ["https://www.alphax.com", "https://alphax.com"],
+    "Yubit": ["https://www.yubit.com", "https://yubit.com"],
+    "WEEX": ["https://www.weex.com", "https://weex.com"],
+    "MEXC": ["https://www.mexc.com", "https://mexc.com"],
+    "Zoomex": ["https://www.zoomex.com", "https://zoomex.com"],
+    "Tapbit": ["https://www.tapbit.com", "https://tapbit.com"],
+    "Hibit": ["https://www.hibt.com", "https://hibt.com"],
 }
 
-MAX_PAGES_PER_EXCHANGE = 6
+# Pehle se maloom events pages (agar khul jaye to kaam aate hain, warna chhor diye jate hain)
+EXTRA_PAGES = {
+    "WEEX": ["https://www.weex.com/events"],
+    "KCEX": ["https://www.kcex.com/en-US/promotions"],
+    "Bitunix": ["https://www.bitunix.com/promo"],
+    "Toobit": ["https://www.toobit.com/en-US/promotions"],
+    "XT": ["https://www.xt.com/en/promotions"],
+    "BloFin": ["https://www.blofin.com/promotions"],
+    "MEXC": ["https://www.mexc.com/events"],
+}
 
-# Link dhoondne ke liye keywords
+MAX_PAGES_PER_EXCHANGE = 5
+CONCURRENCY = 3
+
 STRONG_KW = re.compile(r"event|promo|activit|campaign", re.I)
 WEAK_KW = re.compile(r"reward|bonus|airdrop|contest|competition|carnival|festival", re.I)
 SKIP_LINK = re.compile(
     r"login|log-in|signin|sign-in|register|signup|sign-up|\.(pdf|jpg|jpeg|png|gif|svg|zip)(\?|$)|^mailto:|^javascript:|^tel:",
     re.I,
 )
-
-# Titles nikalne ke selectors
-TITLE_SELECTOR = (
-    "h1, h2, h3, h4, [class*='title'], [class*='Title'], "
-    "[class*='event'], [class*='Event'], [class*='promo'], [class*='Promo'], "
-    "[class*='activity'], [class*='Activity']"
-)
-
-# Faltu text jo event nahi hota
 JUNK = re.compile(
     r"cookie|privacy|terms|copyright|all rights reserved|sign up|log in|login|register|download|"
     r"about us|contact us|careers|support|help center|view more|learn more|read more|"
@@ -49,6 +58,107 @@ JUNK = re.compile(
     r"buy crypto|markets|futures|spot|academy|affiliate",
     re.I,
 )
+
+TITLE_SELECTOR = (
+    "h1, h2, h3, h4, [class*='title'], [class*='Title'], "
+    "[class*='event'], [class*='Event'], [class*='promo'], [class*='Promo'], "
+    "[class*='activity'], [class*='Activity']"
+)
+
+# Page ke andar chalne wala JS: titles + links nikalta hai
+PAGE_JS = r"""
+(sel) => {
+  const out = [];
+  const abs = (h) => { try { return new URL(h, location.href).href; } catch (e) { return null; } };
+  const kw = /event|promo|activit|campaign|reward|bonus|airdrop|contest|competition|carnival|festival/i;
+  const BAD = /logo|icon|avatar|sprite|flag|arrow|qrcode|\.svg(\?|$)/i;
+
+  // root ke andar sab se bari asli photo dhoondta hai
+  const imgOf = (root) => {
+    if (!root) return null;
+    let best = null, bestScore = 0;
+    const list = (root.tagName === 'IMG') ? [root] : Array.from(root.querySelectorAll('img'));
+    list.forEach((im) => {
+      let src = im.currentSrc || im.src || im.getAttribute('data-src') || im.getAttribute('data-lazy-src') || im.getAttribute('data-original') || '';
+      if (!src && im.getAttribute('srcset')) src = im.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
+      if (!src || src.startsWith('data:') || BAD.test(src)) return;
+      const w = im.naturalWidth || im.width || 0, h = im.naturalHeight || im.height || 0;
+      const score = w * h;
+      if (score >= 15000 && score > bestScore) { best = src; bestScore = score; }
+    });
+    if (best) return abs(best);
+    const els = [root].concat(Array.from(root.querySelectorAll('*')).slice(0, 60));
+    for (const e of els) {
+      let bg = '';
+      try { bg = getComputedStyle(e).backgroundImage; } catch (x) {}
+      const m = bg && bg.match(/url\(["']?(.*?)["']?\)/);
+      if (m && m[1] && !m[1].startsWith('data:') && !BAD.test(m[1])) return abs(m[1]);
+    }
+    return null;
+  };
+
+  // kya is node mein is element jaise aur bhi cards hain? (to ye poori list hai, ek card nahi)
+  const multi = (node, el) => {
+    if (el.tagName === 'A') {
+      return Array.from(node.querySelectorAll('a[href]')).filter((x) =>
+        x !== el && kw.test(x.getAttribute('href') || '') && x.href !== el.href).length > 0;
+    }
+    let q = el.tagName.toLowerCase();
+    const c = (typeof el.className === 'string') ? el.className.trim().split(/\s+/)[0] : '';
+    if (c) q += '.' + CSS.escape(c);
+    return node.querySelectorAll(q).length > 1;
+  };
+
+  // element se upar chadh kar sab se chhota card dhoondta hai jisme photo ho
+  const cardInfo = (el, title) => {
+    let node = el, image = null, box = null;
+    for (let i = 0; i < 6 && node; i++) {
+      if ((node.innerText || '').length > 700) break;
+      if (node !== el && multi(node, el)) break;
+      const im = imgOf(node);
+      if (im) { image = im; box = node; break; }
+      node = node.parentElement;
+    }
+    let src = box;
+    if (!src && el.parentElement && !multi(el.parentElement, el)) src = el.parentElement;
+    let desc = '';
+    if (src && (src.innerText || '').length <= 700) {
+      const lines = (src.innerText || '').split('\n').map((x) => x.trim())
+        .filter((x) => x.length >= 15 && x.length <= 220 && x !== title);
+      desc = lines.slice(0, 2).join(' ');
+    }
+    return { i: image, d: desc };
+  };
+
+  let budget = 250;
+  document.querySelectorAll(sel).forEach((el) => {
+    const t = (el.innerText || '').trim();
+    const a = el.closest('a');
+    let info = { i: null, d: '' };
+    if (t.length >= 10 && t.length <= 150 && t.indexOf('\n') === -1 && budget > 0) { budget--; info = cardInfo(el, t); }
+    out.push({ t: t, h: a ? abs(a.getAttribute('href')) : null, k: 'title', i: info.i, d: info.d });
+  });
+  document.querySelectorAll('a[href]').forEach((a) => {
+    const h = abs(a.getAttribute('href'));
+    if (!h) return;
+    const img = a.querySelector('img');
+    let t = (a.innerText || '').trim();
+    if (!t && img) t = (img.alt || img.title || '').trim();
+    if (!t) t = (a.getAttribute('aria-label') || a.title || '').trim();
+    const k = kw.test(h) ? 'kwlink' : 'link';
+    let info = { i: null, d: '' };
+    if (k === 'kwlink' && t.length >= 10 && budget > 0) {
+      budget--;
+      info = cardInfo(a, t.split('\n')[0].trim());
+      if (!info.i) info.i = imgOf(a);
+    }
+    out.push({ t: t, h: h, k: k, i: info.i, d: info.d });
+  });
+  return out;
+}
+"""
+
+STEALTH_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 
 
 def generate_hash(text):
@@ -65,10 +175,13 @@ def same_site(url, base):
     return host == base or host.endswith("." + base)
 
 
-def clean_title(raw):
+def clean_title(raw, allow_multiline=False):
     raw = (raw or "").strip()
-    if "\n" in raw:  # bade containers chhod do, sirf single-line titles
-        return None
+    if "\n" in raw:
+        if not allow_multiline:
+            return None
+        lines = [l.strip() for l in raw.split("\n") if len(l.strip()) >= 10]
+        raw = lines[0] if lines else ""
     text = re.sub(r"\s+", " ", raw)
     if len(text) < 10 or len(text) > 150:
         return None
@@ -79,115 +192,221 @@ def clean_title(raw):
     return text
 
 
-async def discover_links(page, home, log):
-    """Homepage khol kar event/promo wale links dhoondta hai."""
-    base = base_domain(home)
+async def settle(page):
     try:
-        await page.goto(home, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(4000)
-        anchors = await page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => [e.href, (e.innerText || '').trim()])",
-        )
-    except Exception as e:
-        log["errors"].append(f"homepage: {str(e)[:80]}")
-        return []
+        await page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
+    for _ in range(3):
+        try:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            break
+        await page.wait_for_timeout(1200)
 
-    scored = {}
-    for href, text in anchors:
-        href = href.split("#")[0]
-        if not href.startswith("http") or SKIP_LINK.search(href):
+
+async def open_page(page, url):
+    """True return karta hai agar page theek khula."""
+    resp = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    if resp is not None and resp.status >= 400:
+        return False
+    await page.wait_for_timeout(2500)
+    return True
+
+
+async def discover_links(page, candidates, log):
+    """Homepage kholta hai aur event/promo wale links dhoondta hai."""
+    for home in candidates:
+        try:
+            if not await open_page(page, home):
+                log["errors"].append(f"{home}: HTTP error")
+                continue
+            await settle(page)
+            items = await page.evaluate(PAGE_JS, TITLE_SELECTOR)
+        except Exception as e:
+            log["errors"].append(f"{home}: {str(e)[:70]}")
             continue
-        if not same_site(href, base):
+
+        base = base_domain(page.url or home)
+        scored = {}
+        for it in items:
+            href = (it.get("h") or "").split("#")[0]
+            if not href.startswith("http") or SKIP_LINK.search(href):
+                continue
+            if not same_site(href, base):
+                continue
+            text = it.get("t") or ""
+            score = 0
+            if STRONG_KW.search(href):
+                score += 2
+            if STRONG_KW.search(text):
+                score += 1
+            if WEAK_KW.search(href) or WEAK_KW.search(text):
+                score += 1
+            if score > 0:
+                scored[href] = max(score, scored.get(href, 0))
+        ranked = [u for u, _ in sorted(scored.items(), key=lambda x: -x[1])]
+        return home, ranked
+    return None, []
+
+
+def clean_desc(raw, title):
+    text = re.sub(r"\s+", " ", (raw or "")).strip()
+    if len(text) < 20:
+        return None
+    if title and (text == title or text in title):
+        return None
+    if JUNK.search(text):
+        return None
+    return text[:220]
+
+
+def titles_from_items(items, page_url, strict):
+    """items se {title: {link, image, desc}} banata hai."""
+    found = {}
+    for it in items:
+        kind = it.get("k")
+        if kind == "link":
             continue
-        score = 0
-        if STRONG_KW.search(href):
-            score += 2
-        if STRONG_KW.search(text):
-            score += 1
-        if WEAK_KW.search(href) or WEAK_KW.search(text):
-            score += 1
-        if score > 0:
-            scored[href] = max(score, scored.get(href, 0))
+        if strict and kind != "kwlink":
+            continue
+        title = clean_title(it.get("t"), allow_multiline=(kind == "kwlink"))
+        if not title:
+            continue
+        link = it.get("h") or page_url
+        if SKIP_LINK.search(link or ""):
+            link = page_url
+        img = it.get("i") or None
+        desc = clean_desc(it.get("d"), title)
+        cur = found.get(title)
+        if cur is None:
+            found[title] = {"link": link, "image": img, "desc": desc}
+        else:
+            if not cur["image"] and img:
+                cur["image"] = img
+            if not cur["desc"] and desc:
+                cur["desc"] = desc
+    return found
 
-    ranked = sorted(scored.items(), key=lambda x: -x[1])
-    return [u for u, _ in ranked]
 
-
-async def extract_titles(page, url, log):
+async def extract_titles(page, url, log, strict=False):
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(4000)
-        raws = await page.eval_on_selector_all(
-            TITLE_SELECTOR, "els => els.map(e => (e.innerText || '').trim())"
-        )
+        if not await open_page(page, url):
+            log["errors"].append(f"{url[:60]}: HTTP error")
+            return {}
+        await settle(page)
+        items = await page.evaluate(PAGE_JS, TITLE_SELECTOR)
         log["pages_opened"] += 1
     except Exception as e:
         log["errors"].append(f"{url[:60]}: {str(e)[:60]}")
-        return []
-
-    titles, seen = [], set()
-    for raw in raws:
-        t = clean_title(raw)
-        if t and t not in seen:
-            seen.add(t)
-            titles.append(t)
-    return titles
+        return {}
+    return titles_from_items(items, page.url or url, strict)
 
 
-def save_event(name, title, url):
-    """True return karta hai agar event bilkul naya tha."""
-    row = {
-        "exchange_name": name,
-        "event_name": title,
-        "event_url": url,
-        "event_hash": generate_hash(f"{name}_{title}"),
-    }
+def sync_events(name, found):
+    """Naye events insert karta hai, purane mein photo/description bharta hai. Naye ki ginti return karta hai."""
     try:
-        r = supabase.table("events").upsert(
-            row, on_conflict="event_hash", ignore_duplicates=True
-        ).execute()
-        return bool(r.data)
+        res = (
+            supabase.table("events")
+            .select("event_hash,image_url,description")
+            .eq("exchange_name", name)
+            .execute()
+        )
+        existing = {r["event_hash"]: r for r in (res.data or [])}
     except Exception as e:
-        print(f"  [!] DB error: {str(e)[:100]}")
-        return False
+        print(f"  [!] select error ({name}): {str(e)[:100]}")
+        existing = {}
+
+    new = 0
+    for title, info in found.items():
+        h = generate_hash(f"{name}_{title}")
+        base = {
+            "exchange_name": name,
+            "event_name": title,
+            "event_url": info["link"],
+            "event_hash": h,
+        }
+        full = dict(base, image_url=info["image"], description=info["desc"])
+        cur = existing.get(h)
+        try:
+            if cur is None:
+                try:
+                    r = supabase.table("events").upsert(
+                        full, on_conflict="event_hash", ignore_duplicates=True
+                    ).execute()
+                except Exception:
+                    # SQL (image_url/description columns) abhi nahi chali to bina photo ke save karo
+                    r = supabase.table("events").upsert(
+                        base, on_conflict="event_hash", ignore_duplicates=True
+                    ).execute()
+                if r.data:
+                    new += 1
+                    print(f"  [+] {name} NEW: {title}")
+            else:
+                upd = {}
+                if info["image"] and not cur.get("image_url"):
+                    upd["image_url"] = info["image"]
+                if info["desc"] and not cur.get("description"):
+                    upd["description"] = info["desc"]
+                if upd:
+                    supabase.table("events").update(upd).eq("event_hash", h).execute()
+        except Exception as e:
+            print(f"  [!] DB error ({name}): {str(e)[:100]}")
+    return new
 
 
-async def scrape_exchange(context, name, cfg):
-    print(f"\n=== {name} ===")
-    log = {"pages_opened": 0, "found": 0, "new": 0, "errors": []}
-    page = await context.new_page()
+async def scrape_exchange(context, name, candidates, sem):
+    async with sem:
+        log = {"pages_opened": 0, "found": 0, "new": 0, "errors": [], "home": None, "with_image": 0}
+        page = await context.new_page()
+        try:
+            home, discovered = await discover_links(page, candidates, log)
+            log["home"] = home
 
-    discovered = await discover_links(page, cfg["home"], log)
-    candidates = list(cfg.get("extra", []))
-    for u in discovered:
-        if u not in candidates:
-            candidates.append(u)
-    candidates = candidates[:MAX_PAGES_PER_EXCHANGE]
-    print(f"  Links mile: {len(discovered)} | Pages try honge: {len(candidates)}")
+            pages = []
+            for u in EXTRA_PAGES.get(name, []) + discovered:
+                if u not in pages:
+                    pages.append(u)
+            pages = pages[:MAX_PAGES_PER_EXCHANGE]
 
-    all_titles = {}
-    for url in candidates:
-        for t in await extract_titles(page, url, log):
-            all_titles.setdefault(t, url)
+            all_titles = {}
 
-    log["found"] = len(all_titles)
-    for title, url in all_titles.items():
-        if save_event(name, title, url):
-            log["new"] += 1
-            print(f"  [+] NEW: {title}")
+            def merge(found):
+                for t, info in found.items():
+                    cur = all_titles.get(t)
+                    if cur is None:
+                        all_titles[t] = dict(info)
+                    else:
+                        if not cur["image"] and info["image"]:
+                            cur["image"] = info["image"]
+                        if not cur["desc"] and info["desc"]:
+                            cur["desc"] = info["desc"]
 
-    await page.close()
-    print(
-        f"  Result: pages khuli={log['pages_opened']}, events mile={log['found']}, naye={log['new']}"
-    )
-    for err in log["errors"][:3]:
-        print(f"  [warn] {err}")
-    return log
+            for url in pages:
+                merge(await extract_titles(page, url, log))
+
+            # Kuch na mile to homepage ke banners/links (strict mode) aazmayen
+            if not all_titles and home:
+                merge(await extract_titles(page, home, log, strict=True))
+
+            log["found"] = len(all_titles)
+            log["with_image"] = sum(1 for v in all_titles.values() if v["image"])
+            log["new"] = sync_events(name, all_titles)
+        except Exception as e:
+            log["errors"].append(str(e)[:80])
+        finally:
+            await page.close()
+
+        print(
+            f"[{name}] home={log['home']} pages={log['pages_opened']} "
+            f"events={log['found']} photos={log['with_image']} new={log['new']}"
+        )
+        for err in log["errors"][:3]:
+            print(f"   [warn] {err}")
+        return log
 
 
 async def main():
-    summary = {}
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -199,21 +418,22 @@ async def main():
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1366, "height": 900},
+            locale="en-US",
         )
-        for name, cfg in EXCHANGES.items():
-            try:
-                summary[name] = await scrape_exchange(context, name, cfg)
-            except Exception as e:
-                print(f"Error scraping {name}: {e}")
-                summary[name] = {"pages_opened": 0, "found": 0, "new": 0, "errors": [str(e)]}
+        await context.add_init_script(STEALTH_JS)
+
+        sem = asyncio.Semaphore(CONCURRENCY)
+        results = await asyncio.gather(
+            *[scrape_exchange(context, n, c, sem) for n, c in EXCHANGES.items()]
+        )
         await browser.close()
 
     print("\n========== SUMMARY ==========")
-    for name, log in summary.items():
-        status = "OK " if log["found"] > 0 else "FAIL"
+    for (name, _), log in zip(EXCHANGES.items(), results):
+        status = "OK  " if log["found"] > 0 else "FAIL"
         print(
-            f"[{status}] {name:8} pages={log['pages_opened']} "
-            f"events={log['found']} new={log['new']}"
+            f"[{status}] {name:9} pages={log['pages_opened']} "
+            f"events={log['found']} photos={log['with_image']} new={log['new']}"
         )
 
 
