@@ -29,6 +29,7 @@ EXCHANGES = {
     "Zoomex": ["https://www.zoomex.com", "https://zoomex.com"],
     "Tapbit": ["https://www.tapbit.com", "https://tapbit.com"],
     "Hibit": ["https://www.hibt.com", "https://hibt.com"],
+    "LBank": ["https://www.lbank.com", "https://lbank.com"],
 }
 
 # Pehle se maloom promotion / events pages (khul jayein to kaam aate hain, warna chhor diye jate hain)
@@ -41,7 +42,15 @@ EXTRA_PAGES = {
     "XT": ["https://www.xt.com/en/promotions"],
     "BloFin": ["https://www.blofin.com/promotions"],
     "MEXC": ["https://www.mexc.com/events"],
+    "LBank": ["https://www.lbank.com/new-popular-events"],
+    "Zoomex": ["https://www.zoomex.com/en/promotions", "https://www.zoomex.com/en/events"],
 }
+
+# Welcome bonus pages (homepage ke ilawa ye bhi dekhe jayenge)
+WELCOME_PATHS = ["/welcome", "/newbie", "/newcomer", "/rewards", "/en/welcome", "/en/newbie"]
+WELCOME_RE = (r"(welcome|new user|new member|newbie|newcomer|sign.?up|register|first deposit)[^\n]{0,90}"
+              r"(bonus|reward|gift|voucher|usdt|gift)|up to \$?[\d,]+\s?(usdt|usd|\$)")
+
 
 # Kuch na mile to aam promotion pages ke raaste azmaye jayenge
 PROBE_PATHS = [
@@ -234,7 +243,29 @@ DETAIL_JS = r"""
 }
 """
 
+WELCOME_JS = r"""
+(re) => {
+  const rx = new RegExp(re, 'i');
+  const abs = (h) => { try { return new URL(h, location.href).href; } catch (e) { return null; } };
+  const out = [], seen = new Set();
+  document.querySelectorAll('h1,h2,h3,h4,h5,p,span,div,a,li').forEach((el) => {
+    if (el.children.length > 4) return;
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    if (t.length < 12 || t.length > 120 || !rx.test(t) || seen.has(t)) return;
+    seen.add(t);
+    const a = el.closest('a');
+    let box = el, img = null;
+    for (let i = 0; i < 4 && box && !img; i++) { img = box.querySelector && box.querySelector('img'); box = box.parentElement; }
+    const src = img ? (img.currentSrc || img.src || '') : '';
+    out.push({ t: t, h: a ? abs(a.getAttribute('href')) : null,
+               i: (src && !src.startsWith('data:') && !/logo|icon|\.svg/i.test(src)) ? abs(src) : '' });
+  });
+  return out.slice(0, 6);
+}
+"""
+
 GENERIC_IMG = re.compile(r"open_graph|og[-_]default|default[-_]og|share[-_]default|placeholder|default[-_]share", re.I)
+JUNK_WELCOME = re.compile(r"sign up now|register now|log in|login|download|cookie|terms|privacy", re.I)
 STEALTH_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 
 
@@ -670,6 +701,35 @@ async def scrape_exchange(context, name, candidates, sem):
                     if ok and events:
                         merge(events)
                         break
+
+            # 4) welcome bonus: homepage + welcome pages. Amount/title badle to naya event ban jata hai
+            try:
+                wpages = [home] if home else []
+                if home:
+                    o = urllib.parse.urlparse(home)
+                    wpages += [f"{o.scheme}://{o.netloc}{p}" for p in WELCOME_PATHS[:4]]
+                got = 0
+                for wu in wpages:
+                    if got >= 2:
+                        break
+                    try:
+                        resp = await page.goto(wu, wait_until="domcontentloaded", timeout=30000)
+                        if resp is not None and resp.status >= 400:
+                            continue
+                        await page.wait_for_timeout(2500)
+                        items = await page.evaluate(WELCOME_JS, WELCOME_RE)
+                    except Exception:
+                        continue
+                    for it in items:
+                        title = re.sub(r"\s+", " ", it.get("t") or "").strip()
+                        if len(title) < 12 or JUNK_WELCOME.search(title) or got >= 2:
+                            continue
+                        merge({title: {"link": it.get("h") or page.url, "image": it.get("i") or "",
+                                       "desc": "", "specific": bool(it.get("h"))}})
+                        log["trace"].append(f"WELCOME {short(wu)} -> {title[:60]}")
+                        got += 1
+            except Exception as e:
+                log["errors"].append("welcome: " + str(e)[:60])
 
             existing = load_existing(name)
             await enrich_with_detail_pages(page, name, all_titles, existing, visited, log)
