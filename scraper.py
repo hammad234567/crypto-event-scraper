@@ -36,14 +36,14 @@ EXCHANGES = {
 EXTRA_PAGES = {
     "WEEX": ["https://www.weex.com/events",
              "https://wlakixx.online/rewards?type=activities&languageType=0&appTheme=standard&qrType=activity"],
-    "KCEX": ["https://www.kcex.com/en-US/promotions"],
+    "KCEX": ["https://www.kcex.com/en-US/promotions", "https://www.kcex.com/futures/reward_center"],
     "Bitunix": ["https://www.bitunix.com/promo"],
     "Toobit": ["https://www.toobit.com/en-US/promotions"],
     "XT": ["https://www.xt.com/en/promotions"],
     "BloFin": ["https://www.blofin.com/promotions"],
     "MEXC": ["https://www.mexc.com/events"],
-    "LBank": ["https://www.lbank.com/new-popular-events"],
-    "Zoomex": ["https://www.zoomex.com/en/promotions", "https://www.zoomex.com/en/events"],
+    "LBank": ["https://www.lbank.com/new-popular-events", "https://www.lbank.com/bonus/center"],
+    "Zoomex": ["https://m.zoomex.com/en/task-center/rewards_hub", "https://www.zoomex.com/en/promotions"],
 }
 
 # Welcome bonus pages (homepage ke ilawa ye bhi dekhe jayenge)
