@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import os
 import re
 import urllib.parse
@@ -467,14 +468,86 @@ async def open_page(page, url):
     return True, status
 
 
+# ---------------------------------------------------------------- API (JSON) se events
+API_TITLE = ("title", "name", "activityName", "eventName", "activity_name", "activityTitle", "subject", "headline")
+API_IMG = ("image", "imageUrl", "imgUrl", "img", "banner", "bannerUrl", "cover", "coverUrl", "pic", "picUrl",
+           "pcImage", "h5Image", "activityImage", "thumbnail", "poster", "bannerImg", "imagePc", "imageH5")
+API_LINK = ("url", "link", "jumpUrl", "href", "detailUrl", "h5Url", "linkUrl", "targetUrl", "activityUrl")
+
+
+def events_from_json(objs, page_url):
+    """Page ne jo JSON API jawab diye un mein se (title + photo) wale items nikalta hai."""
+    found = {}
+
+    def img_of(d):
+        for k in API_IMG:
+            v = d.get(k)
+            if isinstance(v, str) and (v.startswith("http") or v.startswith("//") or v.startswith("/")):
+                return urllib.parse.urljoin(page_url, v)
+        return ""
+
+    def walk(o, depth=0):
+        if depth > 7:
+            return
+        if isinstance(o, list):
+            for x in o[:200]:
+                walk(x, depth + 1)
+        elif isinstance(o, dict):
+            title = None
+            for k in API_TITLE:
+                v = o.get(k)
+                if isinstance(v, str):
+                    title = clean_title(v)
+                    if title:
+                        break
+            img = img_of(o)
+            if title and img and not JUNK_API.search(title):
+                link = ""
+                for k in API_LINK:
+                    v = o.get(k)
+                    if isinstance(v, str) and v and not v.startswith(("javascript", "mailto")):
+                        link = urllib.parse.urljoin(page_url, v)
+                        break
+                if title not in found:
+                    found[title] = {"link": link or page_url, "image": img, "desc": "",
+                                    "specific": bool(link) and link.split("#")[0] != page_url.split("#")[0]}
+            for v in o.values():
+                if isinstance(v, (list, dict)):
+                    walk(v, depth + 1)
+
+    for ob in objs:
+        walk(ob)
+    return found if len(found) >= 3 else {}
+
+
+JUNK_API = re.compile(r"banner\s*\d*$|^image\s*\d*$|^icon|logo|language|currency|country", re.I)
+
+
 async def process_page(page, url, log):
     """Ek page kholta hai. (events, hubs, final_url, khula?) return karta hai."""
+    api_objs = []
+
+    async def on_resp(resp):
+        try:
+            ct = (resp.headers.get("content-type") or "").lower()
+            if "json" not in ct or len(api_objs) >= 40:
+                return
+            body = await resp.body()
+            if len(body) > 1_500_000:
+                return
+            api_objs.append(json.loads(body.decode("utf-8", "ignore")))
+        except Exception:
+            pass
+
+    page.on("response", on_resp)
     try:
         ok, status = await open_page(page, url)
     except Exception as e:
+        page.remove_listener("response", on_resp)
         log["trace"].append(f"ERR  {short(url)}  {str(e)[:50]}")
         return {}, {}, url, False
     if not ok:
+        page.remove_listener("response", on_resp)
         log["trace"].append(f"HTTP {status}  {short(url)}")
         return {}, {}, url, False
     try:
@@ -483,13 +556,19 @@ async def process_page(page, url, log):
         final = (page.url or url).split("#")[0]
         parsed = parse_page(items, final)
         events, kind = pick_events(parsed)
+        if not events:
+            api_events = events_from_json(api_objs, final)
+            if api_events:
+                events, kind = api_events, "api"
         if not events and is_event_url(final):
             data = await page.evaluate(DETAIL_JS)
             events = event_from_detail_page(data, final)
             kind = "single" if events else "none"
     except Exception as e:
+        page.remove_listener("response", on_resp)
         log["trace"].append(f"ERR  {short(url)}  {str(e)[:50]}")
         return {}, {}, url, False
+    page.remove_listener("response", on_resp)
     log["pages_opened"] += 1
     log["trace"].append(
         f"{status}  {short(final)}  links={len(parsed['ev'])} cards={len(parsed['cards'])} -> {len(events)} ({kind})"
