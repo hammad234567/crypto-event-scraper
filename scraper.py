@@ -31,9 +31,10 @@ EXCHANGES = {
     "Hibit": ["https://www.hibt.com", "https://hibt.com"],
 }
 
-# Pehle se maloom events pages (agar khul jaye to kaam aate hain, warna chhor diye jate hain)
+# Pehle se maloom promotion / events pages (khul jayein to kaam aate hain, warna chhor diye jate hain)
 EXTRA_PAGES = {
-    "WEEX": ["https://www.weex.com/events"],
+    "WEEX": ["https://www.weex.com/events",
+             "https://wlakixx.online/rewards?type=activities&languageType=0&appTheme=standard&qrType=activity"],
     "KCEX": ["https://www.kcex.com/en-US/promotions"],
     "Bitunix": ["https://www.bitunix.com/promo"],
     "Toobit": ["https://www.toobit.com/en-US/promotions"],
@@ -42,46 +43,76 @@ EXTRA_PAGES = {
     "MEXC": ["https://www.mexc.com/events"],
 }
 
-MAX_PAGES_PER_EXCHANGE = 5
-MAX_DETAIL_PAGES = 25      # ek run mein har exchange ke itne event pages khulenge
+# Kuch na mile to aam promotion pages ke raaste azmaye jayenge
+PROBE_PATHS = [
+    "/promotions", "/promo", "/events", "/activity", "/activities",
+    "/campaign", "/rewards", "/welcome", "/bonus", "/en/promotions", "/en/events",
+]
+
+MAX_PAGES_PER_EXCHANGE = 8    # ek exchange ke itne pages khulenge
+MAX_HUBS_PER_PAGE = 5         # ek page se aage itne promo-hub links follow honge
+MAX_DEPTH = 2
+MAX_DETAIL_PAGES = 25         # jin events ki photo nahi mili unke apne pages
+MAX_EVENTS_PER_EXCHANGE = 60
+MIN_CARDS = 3                 # itne repeated cards hon tabhi ye "promotions ki list" maani jayegi
 CONCURRENCY = 3
 
-STRONG_KW = re.compile(r"event|promo|activit|campaign", re.I)
-WEAK_KW = re.compile(r"reward|bonus|airdrop|contest|competition|carnival|festival", re.I)
+KW = re.compile(
+    r"event|promo|activit|campaign|reward|bonus|airdrop|contest|competition|carnival|festival|"
+    r"welcome|newbie|newcomer|giveaway|lottery|trial|gift", re.I)
+STRONG_KW = re.compile(r"event|promo|activit|campaign|welcome|newbie|newcomer", re.I)
+WEAK_KW = re.compile(r"reward|bonus|airdrop|contest|competition|carnival|festival|giveaway|gift", re.I)
+HUB_SEG = re.compile(
+    r"^(events?|promos?|promotions?|activit(y|ies)|campaigns?|rewards?|bonus(es)?|welcome|newbie|"
+    r"en|en-us|en_us|zh|zh-cn|ja|ko|index|home|list|all|center|hub|new)$", re.I)
 SKIP_LINK = re.compile(
-    r"login|log-in|signin|sign-in|register|signup|sign-up|\.(pdf|jpg|jpeg|png|gif|svg|zip)(\?|$)|^mailto:|^javascript:|^tel:",
+    r"(^|/)(login|log-in|signin|sign-in|register|signup|sign-up)(/|\?|$)|"
+    r"\.(pdf|jpg|jpeg|png|gif|svg|zip)(\?|$)|^mailto:|^javascript:|^tel:",
     re.I,
 )
+# Ye sab "promotion" nahi: nav, legal, announcements, listing/maintenance notices wagera
 JUNK = re.compile(
-    r"cookie|privacy|terms|copyright|all rights reserved|sign up|log in|login|register|download|"
+    r"cookie|privacy|terms|copyright|all rights reserved|sign up|log in|login|register now|download|"
     r"about us|contact us|careers|support|help center|view more|learn more|read more|"
     r"customer service|disclaimer|risk warning|language|subscribe|follow us|my events|"
-    r"buy crypto|markets|futures|spot|academy|affiliate",
+    r"academy|affiliate program|faq|rules|how to |tutorial|announcement|notice|maintenance|"
+    r"delist|will list|will launch|new listing|trading pairs?|system upgrade|wallet",
     re.I,
 )
 
-TITLE_SELECTOR = (
-    "h1, h2, h3, h4, [class*='title'], [class*='Title'], "
-    "[class*='event'], [class*='Event'], [class*='promo'], [class*='Promo'], "
-    "[class*='activity'], [class*='Activity']"
-)
-
-# Page ke andar chalne wala JS: titles + links nikalta hai
+# Page ke andar chalne wala JS. Sirf teen cheezein deta hai:
+#   ev   = promo/event ke slug wale links (card ke saath photo + detail)
+#   card = bina link ke bhi image+title wale repeated cards (promotion list)
+#   hub  = aage follow karne layak promotions/events/welcome pages ke links
 PAGE_JS = r"""
-(sel) => {
+() => {
   const out = [];
   const abs = (h) => { try { return new URL(h, location.href).href; } catch (e) { return null; } };
-  const kw = /event|promo|activit|campaign|reward|bonus|airdrop|contest|competition|carnival|festival/i;
+  const KW = /(event|promo|activit|campaign|reward|bonus|airdrop|contest|competition|carnival|festival|welcome|newbie|newcomer|giveaway|lottery|trial|gift)/i;
+  const HUB = /^(events?|promos?|promotions?|activit(y|ies)|campaigns?|rewards?|bonus(es)?|welcome|newbie|en|en-us|en_us|zh|zh-cn|ja|ko|index|home|list|all|center|hub|new)$/i;
   const BAD = /logo|icon|avatar|sprite|flag|arrow|qrcode|\.svg(\?|$)/i;
 
-  // root ke andar sab se bari asli photo dhoondta hai
+  const evHref = (h) => {
+    let u; try { u = new URL(h); } catch (e) { return false; }
+    const segs = u.pathname.split('/').filter(Boolean);
+    if (!segs.length) return false;
+    if (!KW.test(u.pathname + u.search)) return false;
+    if (!HUB.test(segs[segs.length - 1])) return true;
+    return /[?&](id|activityid|eventid|aid|code)=/i.test(u.search);
+  };
+  const srcOf = (im) => {
+    let s = im.currentSrc || im.src || im.getAttribute('data-src') || im.getAttribute('data-lazy-src') || im.getAttribute('data-original') || '';
+    if (!s && im.getAttribute('srcset')) s = im.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
+    return s;
+  };
+
+  // root ke andar sab se bari asli photo
   const imgOf = (root) => {
     if (!root) return null;
     let best = null, bestScore = 0;
     const list = (root.tagName === 'IMG') ? [root] : Array.from(root.querySelectorAll('img'));
     list.forEach((im) => {
-      let src = im.currentSrc || im.src || im.getAttribute('data-src') || im.getAttribute('data-lazy-src') || im.getAttribute('data-original') || '';
-      if (!src && im.getAttribute('srcset')) src = im.getAttribute('srcset').split(',')[0].trim().split(' ')[0];
+      const src = srcOf(im);
       if (!src || src.startsWith('data:') || BAD.test(src)) return;
       const w = im.naturalWidth || im.width || 0, h = im.naturalHeight || im.height || 0;
       const score = w * h;
@@ -98,19 +129,10 @@ PAGE_JS = r"""
     return null;
   };
 
-  // kya is node mein is element jaise aur bhi cards hain? (to ye poori list hai, ek card nahi)
+  // kya is node mein is jaise aur bhi event-cards hain? (to ye poori list hai, ek card nahi)
   const multi = (node, el) => {
-    if (el.tagName === 'A') {
-      return Array.from(node.querySelectorAll('a[href]')).filter((x) =>
-        x !== el && kw.test(x.getAttribute('href') || '') && x.href !== el.href).length > 0;
-    }
-    let q = el.tagName.toLowerCase();
-    const c = (typeof el.className === 'string') ? el.className.trim().split(/\s+/)[0] : '';
-    if (c) q += '.' + CSS.escape(c);
-    return node.querySelectorAll(q).length > 1;
+    return Array.from(node.querySelectorAll('a[href]')).some((x) => x !== el && x.href !== el.href && evHref(x.href));
   };
-
-  // element se upar chadh kar sab se chhota card dhoondta hai jisme photo ho
   const cardInfo = (el, title) => {
     let node = el, image = null, box = null;
     for (let i = 0; i < 6 && node; i++) {
@@ -131,29 +153,59 @@ PAGE_JS = r"""
     return { i: image, d: desc };
   };
 
-  let budget = 250;
-  document.querySelectorAll(sel).forEach((el) => {
-    const t = (el.innerText || '').trim();
-    const a = el.closest('a');
-    let info = { i: null, d: '' };
-    if (t.length >= 10 && t.length <= 150 && t.indexOf('\n') === -1 && budget > 0) { budget--; info = cardInfo(el, t); }
-    out.push({ t: t, h: a ? abs(a.getAttribute('href')) : null, k: 'title', i: info.i, d: info.d });
-  });
+  // 1) links: ev (event-like) ya hub (promotions page ka rasta)
+  let budget = 300;
   document.querySelectorAll('a[href]').forEach((a) => {
     const h = abs(a.getAttribute('href'));
     if (!h) return;
+    const ev = evHref(h);
     const img = a.querySelector('img');
     let t = (a.innerText || '').trim();
     if (!t && img) t = (img.alt || img.title || '').trim();
     if (!t) t = (a.getAttribute('aria-label') || a.title || '').trim();
-    const k = kw.test(h) ? 'kwlink' : 'link';
     let info = { i: null, d: '' };
-    if (k === 'kwlink' && t.length >= 10 && budget > 0) {
+    if (ev && budget > 0) {
       budget--;
       info = cardInfo(a, t.split('\n')[0].trim());
       if (!info.i) info.i = imgOf(a);
     }
+    let k = 'link';
+    if (ev) k = 'ev';
+    else if (KW.test(h) || (KW.test(t) && t.length <= 40)) k = 'hub';
     out.push({ t: t, h: h, k: k, i: info.i, d: info.d });
+  });
+
+  // 2) bina link ke cards: bari image + title wale repeated blocks
+  const big = (im) => { const r = im.getBoundingClientRect(); return r.width >= 120 && r.width * r.height >= 20000; };
+  const bigImgs = Array.from(document.images).filter((im) => {
+    const s = srcOf(im);
+    return big(im) && s && !s.startsWith('data:') && !BAD.test(s);
+  });
+  const countBig = (n) => bigImgs.filter((im) => n.contains(im)).length;
+  const firstClass = (n) => (n && typeof n.className === 'string') ? n.className.trim().split(/\s+/)[0] : '';
+  const groups = {};
+  bigImgs.forEach((im) => {
+    if (im.closest('header, footer, nav')) return;
+    let node = im, box = null;
+    for (let i = 0; i < 6; i++) {
+      const p = node.parentElement;
+      if (!p || countBig(p) > 1) break;
+      node = p;
+      const len = (node.innerText || '').trim().length;
+      if (len > 500) break;
+      if (len >= 10) box = node;
+    }
+    if (!box) return;
+    const sig = box.tagName + '.' + (firstClass(box) || firstClass(box.parentElement));
+    (groups[sig] = groups[sig] || []).push({ box: box, im: im });
+  });
+  Object.keys(groups).forEach((sig) => {
+    const g = groups[sig];
+    if (g.length < 3) return;
+    g.slice(0, 60).forEach((m) => {
+      const a = m.box.closest('a[href]') || m.box.querySelector('a[href]');
+      out.push({ t: (m.box.innerText || '').trim(), h: a ? abs(a.getAttribute('href')) : null, k: 'card', i: abs(srcOf(m.im)), d: '' });
+    });
   });
   return out;
 }
@@ -172,7 +224,9 @@ DETAIL_JS = r"""
     return { s: src, w: im.naturalWidth || 0, h: im.naturalHeight || 0, a: im.alt || '' };
   }).filter((x) => x.s && !x.s.startsWith('data:') && !BAD.test(x.s));
   const og = meta('og:image') || meta('twitter:image') || '';
+  const h1 = document.querySelector('h1');
   return {
+    title: meta('og:title') || (h1 ? (h1.innerText || '').trim() : '') || document.title || '',
     og: og ? abs(og) : null,
     desc: meta('og:description') || meta('description'),
     imgs: imgs.slice(0, 40).map((x) => ({ s: abs(x.s), w: x.w, h: x.h, a: x.a }))
@@ -181,27 +235,10 @@ DETAIL_JS = r"""
 """
 
 GENERIC_IMG = re.compile(r"open_graph|og[-_]default|default[-_]og|share[-_]default|placeholder|default[-_]share", re.I)
-
-
-def choose_image(data, title):
-    """Event page ki sab se munasib bari photo (logo/icon nahi)."""
-    best, best_score = None, 0
-    words = [w for w in re.findall(r"[a-z0-9]+", (title or "").lower()) if len(w) > 3]
-    for im in data.get("imgs") or []:
-        src = im.get("s")
-        area = (im.get("w") or 0) * (im.get("h") or 0)
-        if not src or area < 20000:
-            continue
-        alt = (im.get("a") or "").lower()
-        score = area + (800000 if any(w in alt for w in words) else 0) + (300000 if re.search(r"banner|cover|hero|poster", src, re.I) else 0)
-        if score > best_score:
-            best, best_score = src, score
-    return best
-
-
 STEALTH_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
 
 
+# ---------------------------------------------------------------- helpers
 def generate_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -214,6 +251,31 @@ def base_domain(url):
 def same_site(url, base):
     host = urllib.parse.urlparse(url).netloc.lower()
     return host == base or host.endswith("." + base)
+
+
+def norm_url(url):
+    u = urllib.parse.urlparse((url or "").split("#")[0])
+    return f"{u.scheme}://{u.netloc.lower()}{u.path.rstrip('/')}" + (f"?{u.query}" if u.query else "")
+
+
+def short(url, n=70):
+    return (url or "")[:n]
+
+
+def is_event_url(url):
+    """Kya ye link ek khaas promo/event ka hai (slug wala), na ke sirf 'events' hub page."""
+    try:
+        u = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    segs = [s for s in u.path.split("/") if s]
+    if not segs:
+        return False
+    if not KW.search(u.path + ("?" + u.query if u.query else "")):
+        return False
+    if not HUB_SEG.match(segs[-1]):
+        return True
+    return bool(re.search(r"(^|&)(id|activityid|eventid|aid|code)=", u.query, re.I))
 
 
 def clean_title(raw, allow_multiline=False):
@@ -235,6 +297,122 @@ def clean_title(raw, allow_multiline=False):
     return text
 
 
+def clean_desc(raw, title):
+    text = re.sub(r"\s+", " ", (raw or "")).strip()
+    if len(text) < 20:
+        return None
+    if title and (text == title or text in title):
+        return None
+    if JUNK.search(text):
+        return None
+    return text[:220]
+
+
+def choose_image(data, title):
+    """Event page ki sab se munasib bari photo (logo/icon nahi)."""
+    best, best_score = None, 0
+    words = [w for w in re.findall(r"[a-z0-9]+", (title or "").lower()) if len(w) > 3]
+    for im in data.get("imgs") or []:
+        src = im.get("s")
+        area = (im.get("w") or 0) * (im.get("h") or 0)
+        if not src or area < 20000:
+            continue
+        alt = (im.get("a") or "").lower()
+        score = area + (800000 if any(w in alt for w in words) else 0) + (300000 if re.search(r"banner|cover|hero|poster", src, re.I) else 0)
+        if score > best_score:
+            best, best_score = src, score
+    return best
+
+
+def event_from_detail_page(data, page_url):
+    """Ek event ke page se sirf us event ka apna title/photo/description."""
+    raw = (data.get("title") or "").strip()
+    parts = re.split(r"\s+[|–—]\s+|\s+-\s+", raw)
+    title = clean_title(parts[0]) or clean_title(raw)
+    if not title:
+        return {}
+    og = data.get("og")
+    img = og if (og and not GENERIC_IMG.search(og)) else choose_image(data, title)
+    desc = clean_desc(data.get("desc"), title)
+    return {title: {"link": page_url, "image": img or "", "desc": desc, "specific": True, "detail": True}}
+
+
+# ---------------------------------------------------------------- page parsing
+def parse_page(items, page_url):
+    """PAGE_JS ke items se: ev (link wale events), cards (bina link ke cards), hubs (aage ke pages)."""
+    base = base_domain(page_url)
+    here = norm_url(page_url)
+    ev, cards, hubs = {}, {}, {}
+
+    def add(store, title, link, specific, image, desc):
+        cur = store.get(title)
+        if cur is None:
+            store[title] = {"link": link, "image": image or None, "desc": desc, "specific": specific}
+            return
+        if specific and not cur["specific"]:
+            cur["link"], cur["specific"] = link, True
+        if not cur["image"] and image:
+            cur["image"] = image
+        if not cur["desc"] and desc:
+            cur["desc"] = desc
+
+    for it in items:
+        k = it.get("k")
+        href = (it.get("h") or "").split("#")[0]
+        if k == "ev":
+            if not href.startswith("http") or SKIP_LINK.search(href) or norm_url(href) == here:
+                continue
+            title = clean_title(it.get("t"), allow_multiline=True)
+            if not title:
+                continue
+            add(ev, title, href, True, it.get("i"), clean_desc(it.get("d"), title))
+        elif k == "card":
+            lines = [l.strip() for l in (it.get("t") or "").split("\n") if l.strip()]
+            title, rest = None, []
+            for idx, l in enumerate(lines):
+                c = clean_title(l)
+                if c:
+                    title, rest = c, lines[idx + 1:]
+                    break
+            if not title:
+                continue
+            desc = clean_desc(" ".join(x for x in rest if len(x) >= 15)[:300], title)
+            specific = (href.startswith("http") and not SKIP_LINK.search(href)
+                        and same_site(href, base) and norm_url(href) != here)
+            add(cards, title, href if specific else page_url, specific, it.get("i"), desc)
+        elif k == "hub":
+            if not href.startswith("http") or SKIP_LINK.search(href) or not same_site(href, base):
+                continue
+            if norm_url(href) == here or is_event_url(href):
+                continue
+            text = it.get("t") or ""
+            score = 0
+            if STRONG_KW.search(href):
+                score += 2
+            if STRONG_KW.search(text):
+                score += 1
+            if WEAK_KW.search(href) or WEAK_KW.search(text):
+                score += 1
+            if score > 0:
+                hubs[href] = max(score, hubs.get(href, 0))
+    return {"ev": ev, "cards": cards, "hubs": hubs}
+
+
+def pick_events(parsed):
+    ev, cards = parsed["ev"], parsed["cards"]
+    if len(ev) >= MIN_CARDS:
+        return dict(ev), "links"
+    if len(cards) >= MIN_CARDS:
+        out = dict(cards)
+        for t, info in ev.items():
+            out.setdefault(t, info)
+        return out, "cards"
+    if ev:
+        return dict(ev), "few-links"
+    return {}, "none"
+
+
+# ---------------------------------------------------------------- browser steps
 async def settle(page):
     try:
         await page.wait_for_load_state("networkidle", timeout=8000)
@@ -249,106 +427,46 @@ async def settle(page):
 
 
 async def open_page(page, url):
-    """True return karta hai agar page theek khula."""
+    """(theek khula?, HTTP status)"""
     resp = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    if resp is not None and resp.status >= 400:
-        return False
+    status = resp.status if resp is not None else 0
+    if resp is not None and status >= 400:
+        return False, status
     await page.wait_for_timeout(2500)
-    return True
+    return True, status
 
 
-async def discover_links(page, candidates, log):
-    """Homepage kholta hai aur event/promo wale links dhoondta hai."""
-    for home in candidates:
-        try:
-            if not await open_page(page, home):
-                log["errors"].append(f"{home}: HTTP error")
-                continue
-            await settle(page)
-            items = await page.evaluate(PAGE_JS, TITLE_SELECTOR)
-        except Exception as e:
-            log["errors"].append(f"{home}: {str(e)[:70]}")
-            continue
-
-        base = base_domain(page.url or home)
-        scored = {}
-        for it in items:
-            href = (it.get("h") or "").split("#")[0]
-            if not href.startswith("http") or SKIP_LINK.search(href):
-                continue
-            if not same_site(href, base):
-                continue
-            text = it.get("t") or ""
-            score = 0
-            if STRONG_KW.search(href):
-                score += 2
-            if STRONG_KW.search(text):
-                score += 1
-            if WEAK_KW.search(href) or WEAK_KW.search(text):
-                score += 1
-            if score > 0:
-                scored[href] = max(score, scored.get(href, 0))
-        ranked = [u for u, _ in sorted(scored.items(), key=lambda x: -x[1])]
-        return home, ranked
-    return None, []
-
-
-def clean_desc(raw, title):
-    text = re.sub(r"\s+", " ", (raw or "")).strip()
-    if len(text) < 20:
-        return None
-    if title and (text == title or text in title):
-        return None
-    if JUNK.search(text):
-        return None
-    return text[:220]
-
-
-def titles_from_items(items, page_url, strict):
-    """items se {title: {link, image, desc}} banata hai."""
-    found = {}
-    for it in items:
-        kind = it.get("k")
-        if kind == "link":
-            continue
-        if strict and kind != "kwlink":
-            continue
-        title = clean_title(it.get("t"), allow_multiline=(kind == "kwlink"))
-        if not title:
-            continue
-        link = it.get("h") or page_url
-        specific = bool(it.get("h")) and not SKIP_LINK.search(link or "")
-        if not specific:
-            link = page_url
-        img = it.get("i") or None
-        desc = clean_desc(it.get("d"), title)
-        cur = found.get(title)
-        if cur is None:
-            found[title] = {"link": link, "image": img, "desc": desc, "specific": specific}
-        else:
-            if specific and not cur["specific"]:
-                cur["link"], cur["specific"] = link, True
-            if not cur["image"] and img:
-                cur["image"] = img
-            if not cur["desc"] and desc:
-                cur["desc"] = desc
-    return found
-
-
-async def extract_titles(page, url, log, strict=False):
+async def process_page(page, url, log):
+    """Ek page kholta hai. (events, hubs, final_url, khula?) return karta hai."""
     try:
-        if not await open_page(page, url):
-            log["errors"].append(f"{url[:60]}: HTTP error")
-            return {}
-        await settle(page)
-        items = await page.evaluate(PAGE_JS, TITLE_SELECTOR)
-        log["pages_opened"] += 1
+        ok, status = await open_page(page, url)
     except Exception as e:
-        log["errors"].append(f"{url[:60]}: {str(e)[:60]}")
-        return {}
-    return titles_from_items(items, page.url or url, strict)
+        log["trace"].append(f"ERR  {short(url)}  {str(e)[:50]}")
+        return {}, {}, url, False
+    if not ok:
+        log["trace"].append(f"HTTP {status}  {short(url)}")
+        return {}, {}, url, False
+    try:
+        await settle(page)
+        items = await page.evaluate(PAGE_JS)
+        final = (page.url or url).split("#")[0]
+        parsed = parse_page(items, final)
+        events, kind = pick_events(parsed)
+        if not events and is_event_url(final):
+            data = await page.evaluate(DETAIL_JS)
+            events = event_from_detail_page(data, final)
+            kind = "single" if events else "none"
+    except Exception as e:
+        log["trace"].append(f"ERR  {short(url)}  {str(e)[:50]}")
+        return {}, {}, url, False
+    log["pages_opened"] += 1
+    log["trace"].append(
+        f"{status}  {short(final)}  links={len(parsed['ev'])} cards={len(parsed['cards'])} -> {len(events)} ({kind})"
+    )
+    return events, parsed["hubs"], final, True
 
 
+# ---------------------------------------------------------------- database
 def load_existing(name):
     try:
         res = (
@@ -407,17 +525,17 @@ def sync_events(name, found, existing):
     return new
 
 
-async def enrich_with_detail_pages(page, name, found, existing, listing_urls, log):
+async def enrich_with_detail_pages(page, name, found, existing, visited, log):
     """Jin events ki photo listing se nahi mili, unka apna page khol kar photo/description nikalta hai."""
     targets = []
     for title, info in found.items():
-        if info["image"]:
+        if info["image"] or info.get("detail"):
             continue
         cur = existing.get(generate_hash(f"{name}_{title}"))
         if cur is not None and cur.get("image_url") is not None:
             continue  # pehle try ho chuka ya photo mil chuki
         link = info["link"]
-        if not info.get("specific") or not link.startswith("http") or link in listing_urls:
+        if not info.get("specific") or not link.startswith("http") or norm_url(link) in visited:
             continue
         targets.append((title, link))
     targets = targets[:MAX_DETAIL_PAGES]
@@ -425,7 +543,8 @@ async def enrich_with_detail_pages(page, name, found, existing, listing_urls, lo
     results = {}
     for title, link in targets:
         try:
-            if not await open_page(page, link):
+            ok, _ = await open_page(page, link)
+            if not ok:
                 results[title] = {}  # HTTP error: photo nahi, dobara try nahi
                 continue
             try:
@@ -437,8 +556,7 @@ async def enrich_with_detail_pages(page, name, found, existing, listing_urls, lo
             log["errors"].append(f"detail {link[:50]}: {str(e)[:50]}")
             # exception par marker nahi lagta, agli run mein dobara koshish hogi
 
-    og_count = {}
-    desc_count = {}
+    og_count, desc_count = {}, {}
     for data in results.values():
         if data.get("og"):
             og_count[data["og"]] = og_count.get(data["og"], 0) + 1
@@ -460,45 +578,101 @@ async def enrich_with_detail_pages(page, name, found, existing, listing_urls, lo
     log["detail_pages"] = len(results)
 
 
+# ---------------------------------------------------------------- one exchange
 async def scrape_exchange(context, name, candidates, sem):
     async with sem:
-        log = {"pages_opened": 0, "found": 0, "new": 0, "errors": [], "home": None, "with_image": 0, "detail_pages": 0}
+        log = {"pages_opened": 0, "found": 0, "new": 0, "errors": [], "home": None,
+               "with_image": 0, "detail_pages": 0, "trace": []}
         page = await context.new_page()
         try:
-            home, discovered = await discover_links(page, candidates, log)
-            log["home"] = home
-
-            pages = []
-            for u in EXTRA_PAGES.get(name, []) + discovered:
-                if u not in pages:
-                    pages.append(u)
-            pages = pages[:MAX_PAGES_PER_EXCHANGE]
-
-            all_titles = {}
+            all_titles, by_link, keys = {}, {}, set()
 
             def merge(found):
                 for t, info in found.items():
+                    key = re.sub(r"\W+", " ", t.lower()).strip()
                     cur = all_titles.get(t)
+                    if cur is None and info.get("specific"):
+                        t0 = by_link.get(info["link"])
+                        if t0:
+                            cur = all_titles[t0]   # wohi event, doosre title ke saath
                     if cur is None:
+                        if key in keys or len(all_titles) >= MAX_EVENTS_PER_EXCHANGE:
+                            continue
+                        keys.add(key)
                         all_titles[t] = dict(info)
-                    else:
-                        if info.get("specific") and not cur.get("specific"):
-                            cur["link"], cur["specific"] = info["link"], True
-                        if not cur["image"] and info["image"]:
-                            cur["image"] = info["image"]
-                        if not cur["desc"] and info["desc"]:
-                            cur["desc"] = info["desc"]
+                        if info.get("specific"):
+                            by_link[info["link"]] = t
+                        continue
+                    if info.get("specific") and not cur.get("specific"):
+                        cur["link"], cur["specific"] = info["link"], True
+                        by_link[info["link"]] = t
+                    if info.get("detail"):
+                        cur["detail"] = True
+                    if not cur["image"] and info["image"]:
+                        cur["image"] = info["image"]
+                    if not cur["desc"] and info["desc"]:
+                        cur["desc"] = info["desc"]
 
-            for url in pages:
-                merge(await extract_titles(page, url, log))
+            visited = set()
+            queue = []          # (url, depth, score)
 
-            # Kuch na mile to homepage ke banners/links (strict mode) aazmayen
+            def enqueue(url, depth, score):
+                n = norm_url(url)
+                if n in visited or any(norm_url(q[0]) == n for q in queue):
+                    return
+                queue.append((url, depth, score))
+
+            # 1) homepage (www / bina www jo khule)
+            for cand in candidates:
+                events, hubs, final, ok = await process_page(page, cand, log)
+                visited.add(norm_url(cand))
+                visited.add(norm_url(final))
+                if ok:
+                    log["home"] = final
+                    merge(events)
+                    for u, sc in sorted(hubs.items(), key=lambda x: -x[1])[:MAX_HUBS_PER_PAGE]:
+                        enqueue(u, 1, sc)
+                    break
+            home = log["home"]
+
+            # 2) maloom promotion pages pehle, phir homepage se mile hub links
+            for u in EXTRA_PAGES.get(name, []):
+                enqueue(u, 0, 99)
+
+            while queue and log["pages_opened"] < MAX_PAGES_PER_EXCHANGE:
+                queue.sort(key=lambda q: (-q[2], q[1]))
+                url, depth, _ = queue.pop(0)
+                if norm_url(url) in visited:
+                    continue
+                visited.add(norm_url(url))
+                events, hubs, final, ok = await process_page(page, url, log)
+                visited.add(norm_url(final))
+                if not ok:
+                    continue
+                merge(events)
+                if depth < MAX_DEPTH:
+                    for u, sc in sorted(hubs.items(), key=lambda x: -x[1])[:MAX_HUBS_PER_PAGE]:
+                        enqueue(u, depth + 1, sc)
+
+            # 3) kuch bhi na mila: aam promotion raaste azmao
             if not all_titles and home:
-                merge(await extract_titles(page, home, log, strict=True))
+                o = urllib.parse.urlparse(home)
+                origin = f"{o.scheme}://{o.netloc}"
+                for p in PROBE_PATHS:
+                    if log["pages_opened"] >= MAX_PAGES_PER_EXCHANGE + 4:
+                        break
+                    u = origin + p
+                    if norm_url(u) in visited:
+                        continue
+                    visited.add(norm_url(u))
+                    events, _, final, ok = await process_page(page, u, log)
+                    visited.add(norm_url(final))
+                    if ok and events:
+                        merge(events)
+                        break
 
             existing = load_existing(name)
-            listing_urls = set(EXTRA_PAGES.get(name, [])) | ({home} if home else set())
-            await enrich_with_detail_pages(page, name, all_titles, existing, listing_urls, log)
+            await enrich_with_detail_pages(page, name, all_titles, existing, visited, log)
 
             log["found"] = len(all_titles)
             log["with_image"] = sum(1 for v in all_titles.values() if v["image"])
@@ -512,6 +686,8 @@ async def scrape_exchange(context, name, candidates, sem):
             f"[{name}] home={log['home']} pages={log['pages_opened']} detail={log['detail_pages']} "
             f"events={log['found']} photos={log['with_image']} new={log['new']}"
         )
+        for line in log["trace"][:10]:
+            print(f"   {line}")
         for err in log["errors"][:3]:
             print(f"   [warn] {err}")
         return log
@@ -546,6 +722,13 @@ async def main():
             f"[{status}] {name:9} pages={log['pages_opened']} "
             f"events={log['found']} photos={log['with_image']} new={log['new']}"
         )
+    fails = [(n, l) for (n, _), l in zip(EXCHANGES.items(), results) if l["found"] == 0]
+    if fails:
+        print("\n---------- FAIL wale exchanges (wajah) ----------")
+        for n, l in fails:
+            print(f"{n}:")
+            for line in l["trace"][:6] or ["(koi page nahi khula)"]:
+                print(f"   {line}")
 
 
 if __name__ == "__main__":
